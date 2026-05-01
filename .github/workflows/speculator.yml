@@ -4,6 +4,8 @@ on:
   schedule:
     # 9:45 AM PHT = 01:45 UTC, Monday to Friday
     - cron: '45 1 * * 1-5'
+    # 10:45 AM PHT = 02:45 UTC, Monday to Friday
+    - cron: '45 2 * * 1-5'
   workflow_dispatch:
     inputs:
       pick_mode:
@@ -39,5 +41,5 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           MAX_BUDGET: ${{ secrets.MAX_BUDGET }}
-          PICK_MODE: ${{ github.event.inputs.pick_mode || 'previous' }}
+          PICK_MODE: ${{ github.event.inputs.pick_mode || 'current' }}
         run: python speculator.py
