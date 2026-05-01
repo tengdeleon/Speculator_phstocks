@@ -1,0 +1,45 @@
+name: Speculator Agent — Daily PSEi Picks
+
+on:
+  schedule:
+    # 9:45 AM PHT = 01:45 UTC, Monday to Friday
+    - cron: '45 1 * * 1-5'
+    # 10:45 AM PHT = 02:45 UTC, Monday to Friday
+    - cron: '45 2 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      pick_mode:
+        description: 'Which day to use for picks'
+        required: true
+        default: 'previous'
+        type: choice
+        options:
+          - previous
+          - current
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  run-speculator:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run Speculator Agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          MAX_BUDGET: ${{ secrets.MAX_BUDGET }}
+          PICK_MODE: ${{ github.event.inputs.pick_mode || 'current' }}
+        run: python speculator.py
