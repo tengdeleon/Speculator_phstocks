@@ -6,6 +6,9 @@ on:
     - cron: '45 1 * * 1-5'
   workflow_dispatch:  # allows manual trigger from GitHub Actions tab
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-speculator:
     runs-on: ubuntu-latest
