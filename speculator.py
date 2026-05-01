@@ -17,6 +17,11 @@ NTFY_TOPIC        = os.environ.get("NTFY_TOPIC", "")
 NTFY_URL          = f"https://ntfy.sh/{NTFY_TOPIC}"
 MAX_BUDGET        = int(os.environ.get("MAX_BUDGET", "5000"))
 
+# PICK_MODE controls which day's closing prices are used:
+#   "previous" = last trading day's close prices (default, always has data)
+#   "current"  = today's prices (only meaningful if market is open/just closed)
+PICK_MODE = os.environ.get("PICK_MODE", "previous").lower()
+
 # ─── PSE HOLIDAYS 2026 ────────────────────────────────────────────────────────
 PSE_HOLIDAYS = {
     "2026-01-01","2026-02-25","2026-04-02","2026-04-03","2026-04-09",
@@ -33,10 +38,19 @@ def get_pht_now() -> datetime:
     return datetime.utcnow() + timedelta(hours=8)
 
 def get_last_trading_day() -> date:
-    d = date.today() - timedelta(days=1)
+    d = get_pht_now().date() - timedelta(days=1)
     while not is_trading_day(d):
         d -= timedelta(days=1)
     return d
+
+def get_target_date() -> tuple:
+    """Returns (target_date, mode_label) based on PICK_MODE"""
+    today = get_pht_now().date()
+    if PICK_MODE == "current" and is_trading_day(today):
+        return today, "Current Trading Day"
+    else:
+        last_td = get_last_trading_day()
+        return last_td, "Previous Trading Day"
 
 # ─── FEE CALCULATOR ──────────────────────────────────────────────────────────
 def calc_fees(buy_amt: float, sell_amt: float) -> dict:
@@ -66,11 +80,9 @@ def get_board_lot(price: float) -> int:
     return 5
 
 # ─── PSE DATA FETCHER ─────────────────────────────────────────────────────────
-def fetch_pse_picks(budget: int) -> list:
+def fetch_pse_picks(budget: int, target_date: date, mode_label: str) -> list:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    last_td = get_last_trading_day()
-    date_str = last_td.strftime("%A, %B %d, %Y")
+    date_str = target_date.strftime("%A, %B %d, %Y")
 
     system = (
         "You are a PSE stock trading assistant. "
@@ -78,7 +90,7 @@ def fetch_pse_picks(budget: int) -> list:
         "No markdown, no backticks, no explanation. Just the JSON array."
     )
 
-    prompt = f"""Search filgit.com/pse-top-gainers for the latest PSE stock data as of {date_str}.
+    prompt = f"""Search filgit.com/pse-top-gainers for PSE stock data as of {date_str} ({mode_label}).
 
 Return top 3 PSEi stocks to buy and sell next trading day for 2% net profit.
 
@@ -151,7 +163,7 @@ Respond with ONLY a JSON array, no other text:
     return json.loads(clean[start:end+1])
 
 # ─── NTFY NOTIFICATION ────────────────────────────────────────────────────────
-def send_ntfy(picks: list, budget: int, trade_date: str):
+def send_ntfy(picks: list, budget: int, trade_date: str, mode_label: str):
     if not picks:
         requests.post(NTFY_URL, headers={
             "Title": "Speculator Agent",
@@ -160,7 +172,7 @@ def send_ntfy(picks: list, budget: int, trade_date: str):
         }, data="No valid picks found today.")
         return
 
-    lines = [f"PSEi Picks | {trade_date} | Budget PHP {budget:,}\n"]
+    lines = [f"PSEi Picks | {trade_date} ({mode_label}) | Budget PHP {budget:,}\n"]
     for i, p in enumerate(picks[:3], 1):
         lines.append(
             f"#{i} {p['ticker']} - {p['name']}\n"
@@ -177,7 +189,7 @@ def send_ntfy(picks: list, budget: int, trade_date: str):
         NTFY_URL,
         data=body.encode("utf-8"),
         headers={
-            "Title": "Speculator: Top 3 PSEi Picks",
+            "Title": f"Speculator: Top 3 PSEi Picks ({mode_label})",
             "Priority": "high",
             "Tags": "chart_with_upwards_trend,moneybag",
             "Content-Type": "text/plain; charset=utf-8",
@@ -192,22 +204,28 @@ def main():
     today   = pht_now.date()
 
     print(f"Running Speculator Agent - PHT: {pht_now.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"PICK_MODE: {PICK_MODE}")
 
-    if not is_trading_day(today):
-        print("Today is not a trading day. Skipping.")
-        return
+    # Determine target date based on PICK_MODE
+    target_date, mode_label = get_target_date()
+    date_str = target_date.strftime("%b %d, %Y")
+    print(f"Using {mode_label}: {date_str}")
 
-    last_td  = get_last_trading_day()
-    date_str = last_td.strftime("%b %d, %Y")
+    # Skip only if today is not a trading day AND mode is current
+    if PICK_MODE == "current" and not is_trading_day(today):
+        print("PICK_MODE=current but today is not a trading day. Switching to previous trading day.")
+        target_date = get_last_trading_day()
+        mode_label  = "Previous Trading Day"
+        date_str    = target_date.strftime("%b %d, %Y")
 
-    print(f"Fetching picks based on {date_str} close prices...")
+    print(f"Fetching picks for {date_str}...")
 
     try:
-        picks = fetch_pse_picks(MAX_BUDGET)
+        picks = fetch_pse_picks(MAX_BUDGET, target_date, mode_label)
         print(f"Got {len(picks)} picks")
         for p in picks:
             print(f"  {p['ticker']}: Buy PHP {p['close_price']} -> Sell PHP {p['sell_price']} | Net +PHP {p['net_profit']:.2f}")
-        send_ntfy(picks, MAX_BUDGET, date_str)
+        send_ntfy(picks, MAX_BUDGET, date_str, mode_label)
 
     except Exception as e:
         print(f"Error: {e}")
